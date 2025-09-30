@@ -95,7 +95,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'blockhire',
         'USER': 'root',
-        'PASSWORD': 'G@ur@v01@06@01',
+        'PASSWORD': 'YOUR_PASSWORD',
         'HOST': 'localhost',  
         'PORT': '3306',
     }
