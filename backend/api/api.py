@@ -1,6 +1,6 @@
-from ninja import Router,NinjaAPI, Schema, File
-from ninja.files import UploadedFile
+from ninja import Router, NinjaAPI, Schema, File
 from ninja.errors import HttpError
+from ninja.files import UploadedFile
 from django.http import HttpRequest
 from .models import Employee, PersonalInfo, ContactInfo, EmploymentInfo, Document
 from .auth_utils import create_jwt, decode_jwt, sha256_hex, generate_empid
@@ -9,11 +9,7 @@ from django.core.exceptions import ValidationError
 import hashlib, time
 from django.conf import settings
 
-# [+] Main NinjaAPI instance that handles the application
 api = NinjaAPI()
-
-# You can still use routers to organize endpoints, but they must be registered with the main 'api' instance.
-# We will define endpoints directly on 'api' for simplicity here.
 
 @api.get("/")
 def hello(request):
@@ -40,6 +36,10 @@ class ProfileIn(Schema):
     department: str | None = None
     employeeId: str | None = None
 
+class VerifyIn(Schema):
+    employeeId: str
+    hash: str
+
 
 def token_from_request(request: HttpRequest):
     token = request.COOKIES.get("access_token")
@@ -63,7 +63,7 @@ def get_profile_for(emp: Employee):
     return {
         "firstName": p.firstname if p else "",
         "lastName": p.lastname if p else "",
-        "dateOfBirth": p.dob.isoformat() if p else "",
+        "dateOfBirth": p.dob.isoformat() if p and p.dob else "",
         "mobile": c.mobile if c else "",
         "email": emp.email,
         "address": c.address if c else "",
@@ -120,14 +120,13 @@ def login(request, payload: LoginIn):
     token = create_jwt(emp.empid)
     res = {"ok": True, "profile": get_profile_for(emp)}
     
-    # [+] CORRECTED: Use the main 'api' instance to create the response
     response = api.create_response(request, res, status=200)
     
     response.set_cookie(
         "access_token",
         token,
         httponly=True,
-        samesite="Lax", # Use 'Lax' for development if not using HTTPS
+        samesite="Lax",
         secure=not settings.DEBUG,
         path="/"
     )
@@ -136,7 +135,6 @@ def login(request, payload: LoginIn):
 
 @api.post("/auth/logout/")
 def logout(request):
-    # [+] CORRECTED: Use the main 'api' instance to create the response
     response = api.create_response(request, {"ok": True}, status=200)
     response.delete_cookie("access_token", path="/")
     return response
@@ -196,27 +194,36 @@ def profile_update(request, payload: ProfileIn):
         emp.email = email
         emp.save()
 
-    if payload.firstName or payload.lastName or payload.dateOfBirth:
-        p, _ = PersonalInfo.objects.get_or_create(empid=emp)
-        p.firstname = payload.firstName or p.firstname
-        p.lastname = payload.lastName or p.lastname
-        p.dob = payload.dateOfBirth or p.dob
-        p.save()
+    personal_info_updates = {
+        'firstname': payload.firstName,
+        'lastname': payload.lastName,
+        'dob': payload.dateOfBirth if payload.dateOfBirth else None,
+    }
+    personal_info_updates = {k: v for k, v in personal_info_updates.items() if v is not None}
+    if personal_info_updates:
+        PersonalInfo.objects.update_or_create(empid=emp, defaults=personal_info_updates)
 
-    if payload.mobile or payload.address or payload.email:
-        c, _ = ContactInfo.objects.get_or_create(empid=emp, defaults={'email': emp.email})
-        c.mobile = payload.mobile or c.mobile
-        c.address = payload.address or c.address
-        c.email = emp.email
-        c.save()
 
-    if payload.jobDesignation or payload.department:
-        e, _ = EmploymentInfo.objects.get_or_create(empid=emp)
-        e.job_designation = payload.jobDesignation or e.job_designation
-        e.department = payload.department or e.department
-        e.save()
+    contact_info_updates = {
+        'mobile': payload.mobile,
+        'address': payload.address,
+        'email': emp.email,
+    }
+    contact_info_updates = {k: v for k, v in contact_info_updates.items() if v is not None}
+    if contact_info_updates:
+        ContactInfo.objects.update_or_create(empid=emp, defaults=contact_info_updates)
+    
+
+    employment_info_updates = {
+        'job_designation': payload.jobDesignation,
+        'department': payload.department,
+    }
+    employment_info_updates = {k: v for k, v in employment_info_updates.items() if v is not None}
+    if employment_info_updates:
+        EmploymentInfo.objects.update_or_create(empid=emp, defaults=employment_info_updates)
 
     return {"ok": True, "profile": get_profile_for(emp)}
+
 
 @api.post("/documents/")
 def upload_document(request, file: UploadedFile = File(...)):
@@ -229,7 +236,6 @@ def upload_document(request, file: UploadedFile = File(...)):
     empid = payload_jwt.get("empid")
     emp = Employee.objects.get(empid=empid)
 
-    # --- CRITICAL FIX: Use the 'file' parameter injected by Ninja ---
     if not file:
         return {"ok": False, "error": "No file uploaded"}
 
@@ -248,3 +254,28 @@ def upload_document(request, file: UploadedFile = File(...)):
     )
 
     return {"ok": True, "documentHash": doc.document_hash}
+
+@api.post("/verify/")
+def verify_document(request, payload: VerifyIn):
+    try:
+        # Find the employee by the given ID
+        employee = Employee.objects.get(empid=payload.employeeId)
+        
+        # Get the most recent document for that employee
+        document = employee.documents.order_by("-uploaded_at").first()
+
+        if not document:
+            return {"ok": False, "error": "No document found for this employee."}
+        
+        # Compare the provided hash with the stored hash
+        if document.document_hash == payload.hash:
+            return {"ok": True, "message": "✅ Document is UNTAMPERED - Hash matches the record."}
+        else:
+            return {"ok": False, "error": "❌ Document has been TAMPERED - Hash does not match the record."}
+
+    except Employee.DoesNotExist:
+        return {"ok": False, "error": f"No record found for Employee ID: {payload.employeeId}"}
+    except Exception as e:
+        # Generic error for any other issues
+        return {"ok": False, "error": "An unexpected error occurred during verification."}
+

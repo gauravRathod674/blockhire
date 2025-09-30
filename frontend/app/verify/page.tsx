@@ -1,10 +1,11 @@
 "use client"
 
 import type React from "react"
-
 import { useState } from "react"
 import Layout from "../../components/Layout"
 import ProtectedRoute from "../../components/ProtectedRoute"
+
+const API = process.env.NEXT_PUBLIC_API_URL;
 
 export default function VerifyPage() {
   const [formData, setFormData] = useState({
@@ -29,31 +30,35 @@ export default function VerifyPage() {
     setLoading(true)
     setVerificationResult({ status: null, message: "" })
 
-    // Simulate verification process
-    setTimeout(() => {
-      // Get stored records
-      const records = JSON.parse(localStorage.getItem("blockchainRecords") || "{}")
-      const storedHash = records[formData.employeeId]
+    // [+] NEW: Call the backend for verification
+    if (!API) {
+      setVerificationResult({ status: 'error', message: 'API URL is not configured.' });
+      setLoading(false);
+      return;
+    }
 
-      if (!storedHash) {
-        setVerificationResult({
-          status: "error",
-          message: `No record found for Employee ID: ${formData.employeeId}`,
-        })
-      } else if (storedHash === formData.hash) {
-        setVerificationResult({
-          status: "success",
-          message: "✅ Document is UNTAMPERED - Hash matches blockchain record",
-        })
+    try {
+      const response = await fetch(`${API}/verify/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.ok) {
+        setVerificationResult({ status: "success", message: data.message });
       } else {
-        setVerificationResult({
-          status: "error",
-          message: "❌ Document has been TAMPERED - Hash does not match blockchain record",
-        })
+        setVerificationResult({ status: "error", message: data.error || "Verification failed." });
       }
 
-      setLoading(false)
-    }, 2000)
+    } catch (error) {
+      setVerificationResult({ status: 'error', message: 'Failed to connect to the verification service.' });
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -118,9 +123,6 @@ export default function VerifyPage() {
                     <strong>Status:</strong> Verified ✅
                   </p>
                   <p>
-                    <strong>Blockchain Network:</strong> Ethereum Mainnet (Simulated)
-                  </p>
-                  <p>
                     <strong>Verification Time:</strong> {new Date().toLocaleString()}
                   </p>
                 </div>
@@ -132,17 +134,10 @@ export default function VerifyPage() {
             <h3>How Verification Works</h3>
             <ol style={{ paddingLeft: "1.5rem" }}>
               <li>Enter the employee ID and document hash you want to verify</li>
-              <li>Our system checks the hash against the blockchain record</li>
+              <li>Our system checks the hash against the record in our secure database</li>
               <li>If hashes match, the document is verified as untampered</li>
               <li>If hashes don't match, the document may have been altered</li>
             </ol>
-
-            <div style={{ marginTop: "2rem", padding: "1rem", background: "#f7fafc", borderRadius: "4px" }}>
-              <p>
-                <strong>Note:</strong> This is a demonstration version. In production, verification would query actual
-                blockchain networks.
-              </p>
-            </div>
           </div>
         </div>
       </Layout>
